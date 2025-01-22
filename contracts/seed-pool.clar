@@ -23,6 +23,8 @@
 (define-constant err-invalid-amount (err u105))
 (define-constant err-invalid-token (err u106))
 (define-constant err-invalid-milestone (err u107))
+(define-constant err-insufficient-votes (err u108))
+(define-constant err-no-votes (err u109))
 
 ;; Data Maps
 (define-map grant-pools
@@ -56,11 +58,22 @@
     { in-favor: bool }
 )
 
+;; Vote tracking
+(define-map vote-tallies
+    { proposal-id: uint }
+    {
+        positive-count: uint,
+        total-count: uint
+    }
+)
+
 ;; Data Variables
 (define-data-var current-pool-id uint u0)
 (define-data-var current-proposal-id uint u0)
 (define-data-var minimum-grant-amount uint u1000000) ;; Set minimum grant amount
 (define-data-var maximum-grant-amount uint u1000000000) ;; Set maximum grant amount
+(define-data-var minimum-votes-required uint u3) ;; Minimum votes required for decision
+(define-data-var quorum-threshold uint u50) ;; Percentage needed for approval (50%)
 
 ;; Private Functions
 (define-private (validate-pool-id (pool-id uint))
@@ -98,6 +111,8 @@
 }))
     (get amount milestone)
 )
+
+;; Public Functions
 
 ;; Create Grant Pool
 (define-public (create-grant-pool (total-amount uint) (token-contract <ft-trait>))
@@ -169,21 +184,43 @@
     )
 )
 
+;; Get vote count for a proposal
+(define-read-only (get-vote-counts (proposal-id uint))
+    (ok (default-to 
+        { positive-count: u0, total-count: u0 }
+        (map-get? vote-tallies { proposal-id: proposal-id })
+    ))
+)
+
 ;; Vote on Proposal
 (define-public (vote-on-proposal (proposal-id uint) (in-favor bool))
     (let
         (
             (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
+            (current-tally (default-to 
+                { positive-count: u0, total-count: u0 }
+                (map-get? vote-tallies { proposal-id: proposal-id })))
         )
-        ;; Validate proposal id and state
-        (asserts! (validate-proposal-id proposal-id) err-not-found)
+        ;; Validate proposal state
         (asserts! (is-eq (get status proposal) "pending") err-invalid-state)
         ;; Check if voter has already voted
         (asserts! (is-none (map-get? votes { proposal-id: proposal-id, voter: tx-sender })) err-invalid-state)
         
+        ;; Record the vote
         (map-set votes
             { proposal-id: proposal-id, voter: tx-sender }
             { in-favor: in-favor }
+        )
+
+        ;; Update vote tally
+        (map-set vote-tallies
+            { proposal-id: proposal-id }
+            {
+                positive-count: (if in-favor 
+                    (+ (get positive-count current-tally) u1)
+                    (get positive-count current-tally)),
+                total-count: (+ (get total-count current-tally) u1)
+            }
         )
         (ok true)
     )
@@ -207,15 +244,51 @@
     )
 )
 
-;; Getter Functions
-(define-read-only (get-pool-details (pool-id uint))
-    (map-get? grant-pools { pool-id: pool-id })
-)
-
-(define-read-only (get-proposal-details (proposal-id uint))
-    (map-get? proposals { proposal-id: proposal-id })
-)
-
-(define-read-only (get-vote (proposal-id uint) (voter principal))
-    (map-get? votes { proposal-id: proposal-id, voter: voter })
+;; Approve or Reject Proposal
+(define-public (finalize-proposal (proposal-id uint))
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
+            (pool (unwrap! (map-get? grant-pools { pool-id: (get pool-id proposal) }) err-not-found))
+            (vote-tally (default-to 
+                { positive-count: u0, total-count: u0 }
+                (map-get? vote-tallies { proposal-id: proposal-id })))
+        )
+        ;; Check permissions
+        (asserts! (is-eq tx-sender (get owner pool)) err-owner-only)
+        ;; Check proposal is pending
+        (asserts! (is-eq (get status proposal) "pending") err-invalid-state)
+        ;; Check minimum votes
+        (asserts! (>= (get total-count vote-tally) (var-get minimum-votes-required)) err-insufficient-votes)
+        ;; Check if there are any votes
+        (asserts! (> (get total-count vote-tally) u0) err-no-votes)
+        
+        ;; Calculate if proposal is approved (more than quorum threshold)
+        (if (>= (get positive-count vote-tally) 
+            (/ (* (get total-count vote-tally) (var-get quorum-threshold)) u100))
+            ;; Approve proposal
+            (begin
+                (map-set proposals
+                    { proposal-id: proposal-id }
+                    (merge proposal { status: "approved" })
+                )
+                ;; Update pool remaining amount
+                (map-set grant-pools
+                    { pool-id: (get pool-id proposal) }
+                    (merge pool 
+                        { remaining-amount: (- (get remaining-amount pool) (get requested-amount proposal)) }
+                    )
+                )
+                (ok true)
+            )
+            ;; Reject proposal
+            (begin
+                (map-set proposals
+                    { proposal-id: proposal-id }
+                    (merge proposal { status: "rejected" })
+                )
+                (ok true)
+            )
+        )
+    )
 )
