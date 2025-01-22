@@ -102,8 +102,6 @@
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         ;; Validate amount
         (asserts! (validate-amount total-amount) err-invalid-amount)
-        ;; Validate token contract
-        (asserts! (is-some (principal-destruct? token-principal)) err-invalid-token)
         ;; Check token balance
         (asserts! 
             (is-ok (contract-call? token-contract get-balance tx-sender)) 
