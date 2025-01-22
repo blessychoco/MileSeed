@@ -196,6 +196,8 @@
 (define-public (vote-on-proposal (proposal-id uint) (in-favor bool))
     (let
         (
+            ;; First validate the proposal-id
+            (valid-id (asserts! (validate-proposal-id proposal-id) err-not-found))
             (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
             (current-tally (default-to 
                 { positive-count: u0, total-count: u0 }
@@ -230,6 +232,8 @@
 (define-public (complete-milestone (proposal-id uint) (milestone-index uint))
     (let
         (
+            ;; First validate the proposal-id
+            (valid-id (asserts! (validate-proposal-id proposal-id) err-not-found))
             (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
             (pool (unwrap! (map-get? grant-pools { pool-id: (get pool-id proposal) }) err-not-found))
         )
@@ -248,6 +252,8 @@
 (define-public (finalize-proposal (proposal-id uint))
     (let
         (
+            ;; First validate the proposal-id
+            (valid-id (asserts! (validate-proposal-id proposal-id) err-not-found))
             (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
             (pool (unwrap! (map-get? grant-pools { pool-id: (get pool-id proposal) }) err-not-found))
             (vote-tally (default-to 
