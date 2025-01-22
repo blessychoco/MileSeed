@@ -63,6 +63,14 @@
 (define-data-var maximum-grant-amount uint u1000000000) ;; Set maximum grant amount
 
 ;; Private Functions
+(define-private (validate-pool-id (pool-id uint))
+    (<= pool-id (var-get current-pool-id))
+)
+
+(define-private (validate-proposal-id (proposal-id uint))
+    (<= proposal-id (var-get current-proposal-id))
+)
+
 (define-private (validate-amount (amount uint))
     (and 
         (>= amount (var-get minimum-grant-amount))
@@ -137,7 +145,8 @@
             (proposal-id (+ (var-get current-proposal-id) u1))
             (pool (unwrap! (map-get? grant-pools { pool-id: pool-id }) err-not-found))
         )
-        ;; Validate pool exists and is active
+        ;; Validate pool id and state
+        (asserts! (validate-pool-id pool-id) err-not-found)
         (asserts! (get active pool) err-invalid-state)
         ;; Validate requested amount
         (asserts! (validate-amount requested-amount) err-invalid-amount)
@@ -166,7 +175,8 @@
         (
             (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
         )
-        ;; Validate proposal exists and is in correct state
+        ;; Validate proposal id and state
+        (asserts! (validate-proposal-id proposal-id) err-not-found)
         (asserts! (is-eq (get status proposal) "pending") err-invalid-state)
         ;; Check if voter has already voted
         (asserts! (is-none (map-get? votes { proposal-id: proposal-id, voter: tx-sender })) err-invalid-state)
