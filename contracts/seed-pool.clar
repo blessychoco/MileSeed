@@ -1,7 +1,18 @@
 ;; MileSeed Grant Distribution Platform Smart Contract
 ;; Handles creation and management of grant pools, proposal submission, and milestone-based fund distribution
 
-(use-trait ft-trait 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
+;; Define SIP-010 Fungible Token Trait
+(define-trait ft-trait
+    (
+        (transfer (uint principal principal (optional (buff 34))) (response bool uint))
+        (get-name () (response (string-ascii 32) uint))
+        (get-symbol () (response (string-ascii 32) uint))
+        (get-decimals () (response uint uint))
+        (get-balance (principal) (response uint uint))
+        (get-total-supply () (response uint uint))
+        (get-token-uri () (response (optional (string-utf8 256)) uint))
+    )
+)
 
 ;; Constants
 (define-constant contract-owner tx-sender)
@@ -9,6 +20,7 @@
 (define-constant err-not-found (err u101))
 (define-constant err-unauthorized (err u102))
 (define-constant err-invalid-state (err u103))
+(define-constant err-insufficient-funds (err u104))
 
 ;; Data Maps
 (define-map grant-pools
@@ -47,7 +59,7 @@
 (define-data-var current-proposal-id uint u0)
 
 ;; Create Grant Pool
-(define-public (create-grant-pool (total-amount uint) (token-contract principal))
+(define-public (create-grant-pool (total-amount uint) (token-contract <ft-trait>))
     (let
         (
             (pool-id (+ (var-get current-pool-id) u1))
@@ -59,7 +71,7 @@
                 owner: tx-sender,
                 total-amount: total-amount,
                 remaining-amount: total-amount,
-                token-contract: token-contract,
+                token-contract: (contract-of token-contract),
                 active: true
             }
         )
@@ -83,7 +95,7 @@
             (pool (unwrap! (map-get? grant-pools { pool-id: pool-id }) err-not-found))
         )
         (asserts! (get active pool) err-invalid-state)
-        (asserts! (<= requested-amount (get remaining-amount pool)) err-invalid-state)
+        (asserts! (<= requested-amount (get remaining-amount pool)) err-insufficient-funds)
         
         (map-set proposals
             { proposal-id: proposal-id }
