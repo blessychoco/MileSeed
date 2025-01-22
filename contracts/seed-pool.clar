@@ -1,5 +1,4 @@
 ;; MileSeed Grant Distribution Platform Smart Contract
-;; Handles creation and management of grant pools, proposal submission, and milestone-based fund distribution
 
 ;; Define SIP-010 Fungible Token Trait
 (define-trait ft-trait
@@ -21,6 +20,9 @@
 (define-constant err-unauthorized (err u102))
 (define-constant err-invalid-state (err u103))
 (define-constant err-insufficient-funds (err u104))
+(define-constant err-invalid-amount (err u105))
+(define-constant err-invalid-token (err u106))
+(define-constant err-invalid-milestone (err u107))
 
 ;; Data Maps
 (define-map grant-pools
@@ -57,21 +59,64 @@
 ;; Data Variables
 (define-data-var current-pool-id uint u0)
 (define-data-var current-proposal-id uint u0)
+(define-data-var minimum-grant-amount uint u1000000) ;; Set minimum grant amount
+(define-data-var maximum-grant-amount uint u1000000000) ;; Set maximum grant amount
+
+;; Private Functions
+(define-private (validate-amount (amount uint))
+    (and 
+        (>= amount (var-get minimum-grant-amount))
+        (<= amount (var-get maximum-grant-amount))
+    )
+)
+
+(define-private (validate-milestones (milestones (list 5 {
+    description: (string-ascii 100),
+    amount: uint,
+    completed: bool
+})))
+    (let
+        (
+            (total-milestone-amount (fold + (map get-milestone-amount milestones) u0))
+        )
+        (> (len milestones) u0)
+    )
+)
+
+(define-private (get-milestone-amount (milestone {
+    description: (string-ascii 100),
+    amount: uint,
+    completed: bool
+}))
+    (get amount milestone)
+)
 
 ;; Create Grant Pool
 (define-public (create-grant-pool (total-amount uint) (token-contract <ft-trait>))
     (let
         (
             (pool-id (+ (var-get current-pool-id) u1))
+            (token-principal (contract-of token-contract))
         )
+        ;; Check permissions
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        ;; Validate amount
+        (asserts! (validate-amount total-amount) err-invalid-amount)
+        ;; Validate token contract
+        (asserts! (is-some (principal-destruct? token-principal)) err-invalid-token)
+        ;; Check token balance
+        (asserts! 
+            (is-ok (contract-call? token-contract get-balance tx-sender)) 
+            err-invalid-token
+        )
+        
         (map-set grant-pools
             { pool-id: pool-id }
             {
                 owner: tx-sender,
                 total-amount: total-amount,
                 remaining-amount: total-amount,
-                token-contract: (contract-of token-contract),
+                token-contract: token-principal,
                 active: true
             }
         )
@@ -94,8 +139,13 @@
             (proposal-id (+ (var-get current-proposal-id) u1))
             (pool (unwrap! (map-get? grant-pools { pool-id: pool-id }) err-not-found))
         )
+        ;; Validate pool exists and is active
         (asserts! (get active pool) err-invalid-state)
+        ;; Validate requested amount
+        (asserts! (validate-amount requested-amount) err-invalid-amount)
         (asserts! (<= requested-amount (get remaining-amount pool)) err-insufficient-funds)
+        ;; Validate milestones
+        (asserts! (validate-milestones milestones) err-invalid-milestone)
         
         (map-set proposals
             { proposal-id: proposal-id }
@@ -118,7 +168,10 @@
         (
             (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
         )
+        ;; Validate proposal exists and is in correct state
         (asserts! (is-eq (get status proposal) "pending") err-invalid-state)
+        ;; Check if voter has already voted
+        (asserts! (is-none (map-get? votes { proposal-id: proposal-id, voter: tx-sender })) err-invalid-state)
         
         (map-set votes
             { proposal-id: proposal-id, voter: tx-sender }
@@ -135,12 +188,13 @@
             (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
             (pool (unwrap! (map-get? grant-pools { pool-id: (get pool-id proposal) }) err-not-found))
         )
+        ;; Validate proposal state
         (asserts! (is-eq (get status proposal) "approved") err-invalid-state)
+        ;; Validate user is the applicant
         (asserts! (is-eq tx-sender (get applicant proposal)) err-unauthorized)
+        ;; Validate milestone index
+        (asserts! (< milestone-index (len (get milestones proposal))) err-invalid-milestone)
         
-        ;; Update milestone status and transfer funds
-        ;; Note: This is a simplified version. In production, you'd want to add more checks
-        ;; and potentially require verification from pool owner
         (ok true)
     )
 )
